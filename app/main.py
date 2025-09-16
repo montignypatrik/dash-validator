@@ -4,6 +4,8 @@ import time
 
 from app.routes import codes, contexts, establishments
 from app.database import SessionLocal  # corrected path
+from app.routers import metrics
+
 
 app = FastAPI()
 
@@ -11,6 +13,8 @@ app = FastAPI()
 app.include_router(codes.router)
 app.include_router(contexts.router)
 app.include_router(establishments.router)
+app.include_router(metrics.router)
+
 
 @app.get("/")
 def root():
