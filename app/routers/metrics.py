@@ -19,14 +19,22 @@ def _find_header(fieldnames: List[str], target: str) -> Optional[str]:
     return mapping.get(_norm(target))
 
 def _decode_bytes(data: bytes) -> str:
+    """
+    Try common encodings seen in CSV exports (Excel, regional settings).
+    Order matters: UTF-8 with BOM -> UTF-8 -> Latin-1.
+    """
     for enc in ("utf-8-sig", "utf-8", "latin-1"):
         try:
             return data.decode(enc)
         except Exception:
             continue
+    # Last-resort fallback: ignore undecodable characters
     return data.decode("utf-8", errors="ignore")
 
 def _parse_date_to_yyyy_mm_dd(s: str) -> Optional[str]:
+    """
+    Accept several common date formats and normalize to YYYY-MM-DD.
+    """
     if not s:
         return None
     s = s.strip()
@@ -48,7 +56,7 @@ def _parse_date_to_yyyy_mm_dd(s: str) -> Optional[str]:
         except Exception:
             pass
 
-    # ISO-like fallback: e.g., 2025-09-14T10:30:00
+    # ISO-like fallback: e.g., 2025-09-14T10:30:00 -> take date part
     if "T" in s:
         try:
             dt = datetime.strptime(s.split("T", 1)[0], "%Y-%m-%d")
@@ -65,6 +73,7 @@ async def unique_patients_by_day(file: UploadFile = File(...)) -> Dict[str, Any]
       - 'Date de Service' (date)
       - 'Patient' (patient ID; used as the ONLY deduplication key)
     Returns per-day unique patient counts and meta info.
+    Supports both comma- and semicolon-separated CSVs.
     """
     try:
         raw = await file.read()
@@ -73,13 +82,13 @@ async def unique_patients_by_day(file: UploadFile = File(...)) -> Dict[str, Any]
 
     text = _decode_bytes(raw)
 
-    # Detect delimiter (default comma)
+    # Detect delimiter (explicitly test comma and semicolon). Fallback to ';'
+    sample = text[:2048]
     try:
-        sample = text[:2048]
-        dialect = csv.Sniffer().sniff(sample)
-        delim = dialect.delimiter
-    except Exception:
-        delim = ","
+        dialect = csv.Sniffer().sniff(sample, delimiters=[",", ";"])
+        delim = getattr(dialect, "delimiter", ";") or ";"
+    except csv.Error:
+        delim = ";"
 
     reader = csv.DictReader(io.StringIO(text), delimiter=delim)
     if not reader.fieldnames:
@@ -124,6 +133,10 @@ async def unique_patients_by_day(file: UploadFile = File(...)) -> Dict[str, Any]
 
     if rows_skipped > 0:
         warnings.append(f"{rows_skipped} row(s) skipped due to missing/invalid date or Patient.")
+
+    # Small hint if we had to fall back to ';'
+    if delim == ";" and ";" not in sample and "," in sample:
+        warnings.append("Delimiter detection fell back to ';'. Check source file formatting if results look off.")
 
     return {
         "results": results,
