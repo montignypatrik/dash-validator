@@ -17,9 +17,26 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _ensure_params_column(conn):
+    """Add params column if missing (SQLite-safe)."""
+    dialect = conn.dialect.name
+    if dialect == "sqlite":
+        cols = [row[1] for row in conn.exec_driver_sql("PRAGMA table_info(rules)").fetchall()]
+        if "params" not in cols:
+            op.add_column("rules", sa.Column("params", sa.Text(), nullable=True))
+    else:
+        # For PostgreSQL or others, define as JSONB if desired
+        insp = sa.inspect(conn)
+        has_params = any(c["name"] == "params" for c in insp.get_columns("rules"))
+        if not has_params:
+            # Use plain TEXT for broad compatibility; your schema can later migrate to JSONB.
+            op.add_column("rules", sa.Column("params", sa.Text(), nullable=True))
+
+
 def upgrade() -> None:
     """Insert or update Required Headers rule."""
     conn = op.get_bind()
+    _ensure_params_column(conn)
 
     # Full header list, semicolon separated, with accents fixed
     required_headers_semicolon = (
@@ -43,45 +60,61 @@ def upgrade() -> None:
         "delimiter": ";",
         "ignore_extras": True,
         "case_insensitive": True,
-        "trim_whitespace": True
+        "trim_whitespace": True,
     }
 
-    # Check if rule exists
+    dialect = conn.dialect.name
+
+    # Existence check
     exists = conn.execute(
         sa.text("SELECT 1 FROM rules WHERE name = :n"),
         {"n": rule_name}
     ).scalar()
 
-    if exists:
-        conn.execute(
-            sa.text("""
-                UPDATE rules
-                   SET description = :d,
-                       category    = :c,
-                       is_active   = TRUE,
-                       params      = CAST(:p AS JSONB)
-                 WHERE name        = :n
-            """),
-            {
-                "d": rule_desc,
-                "c": rule_category,
-                "p": json.dumps(params, ensure_ascii=False),
-                "n": rule_name,
-            },
-        )
+    # Dialect-specific SQL (avoid JSONB/TRUE on SQLite)
+    if dialect == "sqlite":
+        if exists:
+            conn.execute(
+                sa.text("""
+                    UPDATE rules
+                       SET description = :d,
+                           category    = :c,
+                           is_active   = 1,
+                           params      = :p
+                     WHERE name        = :n
+                """),
+                {"d": rule_desc, "c": rule_category, "p": json.dumps(params, ensure_ascii=False), "n": rule_name},
+            )
+        else:
+            conn.execute(
+                sa.text("""
+                    INSERT INTO rules (name, description, category, is_active, params)
+                    VALUES (:n, :d, :c, 1, :p)
+                """),
+                {"n": rule_name, "d": rule_desc, "c": rule_category, "p": json.dumps(params, ensure_ascii=False)},
+            )
     else:
-        conn.execute(
-            sa.text("""
-                INSERT INTO rules (name, description, category, is_active, params)
-                VALUES (:n, :d, :c, TRUE, CAST(:p AS JSONB))
-            """),
-            {
-                "n": rule_name,
-                "d": rule_desc,
-                "c": rule_category,
-                "p": json.dumps(params, ensure_ascii=False),
-            },
-        )
+        # PostgreSQL / other
+        if exists:
+            conn.execute(
+                sa.text("""
+                    UPDATE rules
+                       SET description = :d,
+                           category    = :c,
+                           is_active   = TRUE,
+                           params      = :p
+                     WHERE name        = :n
+                """),
+                {"d": rule_desc, "c": rule_category, "p": json.dumps(params, ensure_ascii=False), "n": rule_name},
+            )
+        else:
+            conn.execute(
+                sa.text("""
+                    INSERT INTO rules (name, description, category, is_active, params)
+                    VALUES (:n, :d, :c, TRUE, :p)
+                """),
+                {"n": rule_name, "d": rule_desc, "c": rule_category, "p": json.dumps(params, ensure_ascii=False)},
+            )
 
 
 def downgrade() -> None:
