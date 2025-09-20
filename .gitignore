@@ -20,3 +20,4 @@ Thumbs.db
 *.backup.py
 *.bak
 *.tmp
+app.db
