@@ -5,15 +5,19 @@ import time
 from app.routes import codes, contexts, establishments
 from app.database import SessionLocal  # corrected path
 from app.routers import metrics
+from app.routers.ingest import router as ingest_router
 
 
 app = FastAPI()
+
+
 
 # Register routers
 app.include_router(codes.router)
 app.include_router(contexts.router)
 app.include_router(establishments.router)
 app.include_router(metrics.router)
+app.include_router(ingest_router)
 
 
 @app.get("/")
