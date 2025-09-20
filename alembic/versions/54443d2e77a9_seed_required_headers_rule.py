@@ -25,11 +25,10 @@ def _ensure_params_column(conn):
         if "params" not in cols:
             op.add_column("rules", sa.Column("params", sa.Text(), nullable=True))
     else:
-        # For PostgreSQL or others, define as JSONB if desired
         insp = sa.inspect(conn)
         has_params = any(c["name"] == "params" for c in insp.get_columns("rules"))
         if not has_params:
-            # Use plain TEXT for broad compatibility; your schema can later migrate to JSONB.
+            # Use TEXT for broad compatibility; you can later migrate to JSONB in Postgres if desired.
             op.add_column("rules", sa.Column("params", sa.Text(), nullable=True))
 
 
@@ -49,9 +48,9 @@ def upgrade() -> None:
         "Agence;Patient;Grand Total"
     )
 
-    # Split into list, strip spaces, keep accents
     required_headers = [h.strip() for h in required_headers_semicolon.split(";")]
 
+    rule_code = "REQUIRED_HEADERS"   # Satisfy NOT NULL rules.code
     rule_name = "required_headers"
     rule_desc = "Validates that all mandatory CSV headers are present (extras allowed)."
     rule_category = "input_format"
@@ -65,13 +64,12 @@ def upgrade() -> None:
 
     dialect = conn.dialect.name
 
-    # Existence check
+    # Prefer checking by name; if you enforce uniqueness on code, this stays consistent.
     exists = conn.execute(
         sa.text("SELECT 1 FROM rules WHERE name = :n"),
         {"n": rule_name}
     ).scalar()
 
-    # Dialect-specific SQL (avoid JSONB/TRUE on SQLite)
     if dialect == "sqlite":
         if exists:
             conn.execute(
@@ -86,15 +84,16 @@ def upgrade() -> None:
                 {"d": rule_desc, "c": rule_category, "p": json.dumps(params, ensure_ascii=False), "n": rule_name},
             )
         else:
+            # NOTE the added 'code' column to satisfy NOT NULL
             conn.execute(
                 sa.text("""
-                    INSERT INTO rules (name, description, category, is_active, params)
-                    VALUES (:n, :d, :c, 1, :p)
+                    INSERT INTO rules (code, name, description, category, is_active, params)
+                    VALUES (:code, :n, :d, :c, 1, :p)
                 """),
-                {"n": rule_name, "d": rule_desc, "c": rule_category, "p": json.dumps(params, ensure_ascii=False)},
+                {"code": rule_code, "n": rule_name, "d": rule_desc, "c": rule_category,
+                 "p": json.dumps(params, ensure_ascii=False)},
             )
     else:
-        # PostgreSQL / other
         if exists:
             conn.execute(
                 sa.text("""
@@ -110,10 +109,11 @@ def upgrade() -> None:
         else:
             conn.execute(
                 sa.text("""
-                    INSERT INTO rules (name, description, category, is_active, params)
-                    VALUES (:n, :d, :c, TRUE, :p)
+                    INSERT INTO rules (code, name, description, category, is_active, params)
+                    VALUES (:code, :n, :d, :c, TRUE, :p)
                 """),
-                {"n": rule_name, "d": rule_desc, "c": rule_category, "p": json.dumps(params, ensure_ascii=False)},
+                {"code": rule_code, "n": rule_name, "d": rule_desc, "c": rule_category,
+                 "p": json.dumps(params, ensure_ascii=False)},
             )
 
 
